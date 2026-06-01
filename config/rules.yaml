@@ -1,0 +1,129 @@
+# Grafana Alert Agent — alert rules (committed; NOT secret).
+#
+# Each rule:
+#   name        unique id (kebab/snake)
+#   title       human label for Discord
+#   expr        PromQL that returns a value; `comparator` + `threshold` decide firing
+#   comparator  one of: gt, gte, lt, lte, eq, ne   (applied to the max series value)
+#   threshold   numeric threshold
+#   for         seconds the condition must hold before firing (for-duration)
+#   severity    critical | high | warning | info
+#   cooldown    seconds before the SAME rule may notify again
+#   panel_id    Grafana panel to screenshot (omit for none)
+#   runbook     short operator hint, fed to Claude as context
+#   correlations:
+#     metrics   extra PromQL queries Claude should see (label -> expr)
+#     logs      LogQL queries for relevant logs (label -> logql)
+
+defaults:
+  env: prod
+  cooldown: 900            # 15 min
+  for: 0
+  job: url-shortener
+
+rules:
+  - name: app_down
+    title: "Application is DOWN"
+    expr: 'up{job="url-shortener"}'
+    comparator: eq
+    threshold: 0
+    for: 60
+    severity: critical
+    panel_id: 11
+    runbook: "App process not being scraped. Check systemd unit url-shortener and journalctl; app may be exiting on startup (see SESSION-STATE.md)."
+    correlations:
+      metrics:
+        scrape_up: 'up'
+      logs:
+        app_errors: '{team="group10"} |= "error" | json'
+
+  - name: high_error_rate
+    title: "High 5xx error rate"
+    expr: 'sum(rate(http_requests_total{status_code=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) * 100'
+    comparator: gt
+    threshold: 5
+    for: 300
+    severity: critical
+    panel_id: 8
+    runbook: "5xx ratio over 5%. Likely Postgres/Redis dependency failure or a bad deploy. Check DB connectivity and recent releases."
+    correlations:
+      metrics:
+        req_by_status: 'sum by (status_code) (rate(http_requests_total[5m]))'
+        errors_by_path: 'sum by (path) (rate(http_request_errors_total[5m]))'
+      logs:
+        five_xx: '{team="group10"} | json | status_code=~"5.."'
+
+  - name: high_p99_latency
+    title: "p99 latency degraded"
+    expr: 'max(http_request_duration_seconds{quantile="0.99"})'
+    comparator: gt
+    threshold: 2
+    for: 300
+    severity: high
+    panel_id: 9
+    runbook: "p99 > 2s. Often a Redis cache outage forcing DB fallback, or DB slow queries. Check Redis reachability and DB load."
+    correlations:
+      metrics:
+        avg_latency: 'avg(http_request_duration_avg_seconds)'
+        inflight: 'sum(http_requests_in_flight)'
+      logs:
+        slow: '{team="group10"} |= "slow" | json'
+
+  - name: inflight_saturation
+    title: "In-flight requests saturated"
+    expr: 'sum(http_requests_in_flight)'
+    comparator: gt
+    threshold: 100
+    for: 180
+    severity: high
+    panel_id: 11
+    runbook: "Requests piling up — downstream stall (DB/Redis) or traffic spike. Check dependency health and goroutine count."
+    correlations:
+      metrics:
+        goroutines: 'go_goroutines{job="url-shortener"}'
+        req_rate: 'sum(rate(http_requests_total[1m]))'
+
+  - name: high_cpu
+    title: "High CPU utilization"
+    expr: '100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)'
+    comparator: gt
+    threshold: 85
+    for: 300
+    severity: warning
+    panel_id: 3
+    runbook: "Sustained CPU > 85%. Check load average and whether traffic or a runaway process is the cause."
+    correlations:
+      metrics:
+        load1: 'max(node_load1)'
+
+  - name: high_memory
+    title: "High memory usage"
+    expr: '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100'
+    comparator: gt
+    threshold: 85
+    for: 300
+    severity: warning
+    panel_id: 4
+    runbook: "Memory > 85% — OOM risk. Check process_resident_memory_bytes for a leak trend."
+    correlations:
+      metrics:
+        rss: 'process_resident_memory_bytes{job="url-shortener"}'
+
+  - name: disk_low
+    title: "Disk space low"
+    expr: 'min(node_filesystem_avail_bytes / node_filesystem_size_bytes * 100)'
+    comparator: lt
+    threshold: 10
+    for: 300
+    severity: high
+    runbook: "Filesystem under 10% free. Check logs/journald growth and disk usage; rotate or clean up."
+
+  - name: goroutine_leak
+    title: "Goroutine count abnormally high"
+    expr: 'go_goroutines{job="url-shortener"}'
+    comparator: gt
+    threshold: 1000
+    for: 600
+    severity: warning
+    panel_id: 10
+    runbook: "Goroutines climbing unbounded suggests a leak (unclosed connections). Compare against baseline."
