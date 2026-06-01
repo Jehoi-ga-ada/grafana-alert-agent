@@ -14,7 +14,7 @@ wheels/
 *.db
 *.db-wal
 *.db-shm
-state/
+/state/
 .gaa/
 
 # Test / coverage
