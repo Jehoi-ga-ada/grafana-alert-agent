@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     dashboard_uid: str = ""
     dashboard_slug: str = "url-shortener-public"
 
+    # LangSmith tracing (LangChain/LangGraph). Off by default; the API key is a
+    # secret and must come from .env only — never committed. When enabled, these
+    # are exported to the native LANGSMITH_* env vars (see gaa.observability).
+    langsmith_tracing: bool = False
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
+    langsmith_api_key: str = ""
+    langsmith_project: str = "grafana-agent"
+
     # Behaviour
     poll_interval_seconds: int = Field(default=30, ge=5)
     default_env: str = "prod"

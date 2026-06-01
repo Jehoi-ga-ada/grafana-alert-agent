@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 
 def _extract_text(content) -> str:
@@ -39,6 +39,42 @@ def summarize_messages(messages: list) -> dict:
     return {"text": final_text.strip(), "tools": tools_used}
 
 
+def unanswered_tool_messages(messages: list) -> list[ToolMessage]:
+    """Return a synthetic error ToolMessage for every tool_call left unanswered.
+
+    A run interrupted between the model emitting a tool_call and the tools node
+    writing its ToolMessage (e.g. the recursion limit is hit on the agent step,
+    or the task is cancelled) leaves a dangling tool_call in checkpointed thread
+    memory. Replaying that history fails the provider invariant *every* tool_call
+    needs a matching ToolMessage. This finds those gaps so they can be backfilled
+    before the next turn. Pure — takes/returns plain message objects.
+    """
+    answered = {m.tool_call_id for m in messages if isinstance(m, ToolMessage)}
+    repairs: list[ToolMessage] = []
+    for msg in messages:
+        if not isinstance(msg, AIMessage):
+            continue
+        for call in msg.tool_calls or []:
+            call_id = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
+            if call_id and call_id not in answered:
+                repairs.append(
+                    ToolMessage(
+                        content="(tool result unavailable — the previous run was interrupted)",
+                        tool_call_id=call_id,
+                    )
+                )
+    return repairs
+
+
+async def _heal_thread(agent, config) -> None:  # pragma: no cover - needs a live checkpointer
+    """Backfill any dangling tool_calls in this thread's checkpoint before invoking."""
+    snapshot = await agent.aget_state(config)
+    messages = (snapshot.values or {}).get("messages", []) if snapshot else []
+    repairs = unanswered_tool_messages(messages)
+    if repairs:
+        await agent.aupdate_state(config, {"messages": repairs})
+
+
 async def answer(agent, thread_id: str, query: str, max_steps: int = 16) -> dict:  # pragma: no cover - live call
     """Run the agent to completion and return {text, tools}.
 
@@ -47,11 +83,10 @@ async def answer(agent, thread_id: str, query: str, max_steps: int = 16) -> dict
     """
     from langgraph.errors import GraphRecursionError
 
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": max_steps}
     try:
-        result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": query}]},
-            config={"configurable": {"thread_id": thread_id}, "recursion_limit": max_steps},
-        )
+        await _heal_thread(agent, config)
+        result = await agent.ainvoke({"messages": [{"role": "user", "content": query}]}, config=config)
         return summarize_messages(result["messages"])
     except GraphRecursionError:
         return {

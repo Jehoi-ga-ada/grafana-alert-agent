@@ -48,6 +48,9 @@ class Core:
 
 
 def build_core(settings: Settings, clock=time.time) -> Core:
+    from gaa.observability import configure_langsmith
+
+    configure_langsmith(settings)
     grafana = GrafanaClient(settings.grafana_url, settings.grafana_sa_token, verify=settings.verify)
     metrics = MetricsClient(grafana)
     logs = LogsClient(grafana)
