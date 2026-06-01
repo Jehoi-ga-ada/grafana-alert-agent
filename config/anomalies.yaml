@@ -1,0 +1,37 @@
+# Anomaly checks — current value vs a historical baseline (PromQL offset).
+# Flagged when current deviates beyond `factor`× the baseline in `direction`.
+# Edge-triggered + cooldown so the proactive sweep doesn't spam.
+
+defaults:
+  lookback: 1d        # baseline = same expr, 1 day ago
+  factor: 3.0         # flag if >3× or <1/3× baseline
+  direction: both
+  min_baseline: 0.05  # ignore near-zero baselines (low-traffic noise)
+  cooldown: 3600
+
+checks:
+  - name: request_rate_anomaly
+    title: "Request rate vs yesterday"
+    expr: 'sum(rate(http_requests_total[5m]))'
+    factor: 3.0
+    direction: both
+
+  - name: error_rate_anomaly
+    title: "5xx error ratio vs yesterday"
+    expr: 'sum(rate(http_requests_total{status_code=~"5.."}[5m])) / clamp_min(sum(rate(http_requests_total[5m])), 0.001) * 100'
+    factor: 4.0
+    direction: above
+    min_baseline: 0.1
+
+  - name: latency_anomaly
+    title: "p99 latency vs last week"
+    expr: 'max(http_request_duration_seconds{quantile="0.99"})'
+    lookback: 7d
+    factor: 2.5
+    direction: above
+
+  - name: memory_anomaly
+    title: "App memory vs yesterday"
+    expr: 'max(process_resident_memory_bytes{job="url-shortener"})'
+    factor: 2.0
+    direction: above

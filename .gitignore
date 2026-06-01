@@ -8,3 +8,23 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Secrets & local state
+.env
+*.db
+*.db-wal
+*.db-shm
+/state/
+.gaa/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Playwright
+playwright-state.json
+
+# Vendored binaries (mcp-grafana, etc.)
+.tools/
